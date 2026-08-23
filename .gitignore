@@ -1,0 +1,34 @@
+node_modules/
+
+# Private runtime configuration and credentials
+config.json
+.env
+.env.*
+!.env.example
+
+# Runtime state and business data
+state/
+data/
+reports/
+artifacts/
+downloads/
+*.jsonl
+*.ndjson
+*.log
+*.pid
+*.sqlite
+*.sqlite-*
+
+# Product and review assets
+*.csv
+*.xls
+*.xlsx
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# Local editor / OS files
+.DS_Store
+.idea/
+.vscode/

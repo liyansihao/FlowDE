@@ -1,0 +1,17 @@
+{
+  "name": "flowde",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A data-safe multi-store supervisor with sharding, standby failover, and per-store daily quotas.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node --check src/flowde.mjs && node --check adapters/example-engine.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "start": "node src/flowde.mjs start",
+    "status": "node src/flowde.mjs status",
+    "stop": "node src/flowde.mjs stop"
+  }
+}

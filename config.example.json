@@ -1,0 +1,38 @@
+{
+  "contract": "flowde-multistore-v1",
+  "engine": "./adapters/example-engine.mjs",
+  "runtime": {
+    "store_concurrency": 2,
+    "primary_store_ids": [
+      "primary-01",
+      "primary-02"
+    ],
+    "standby_store_ids": [
+      "standby-01"
+    ],
+    "daily_store_creation_limit": 100,
+    "daily_quota_timezone": "Asia/Shanghai",
+    "daily_quota_reset_local": "00:00",
+    "max_creations_per_cycle": 10,
+    "cycle_pause_seconds": 5,
+    "standby_poll_seconds": 30,
+    "supervisor_poll_seconds": 5
+  },
+  "stores": [
+    {
+      "store_id": "primary-01",
+      "store_name": "Primary Store 01",
+      "enabled": true
+    },
+    {
+      "store_id": "primary-02",
+      "store_name": "Primary Store 02",
+      "enabled": true
+    },
+    {
+      "store_id": "standby-01",
+      "store_name": "Standby Store 01",
+      "enabled": true
+    }
+  ]
+}
