@@ -11,6 +11,8 @@ import {
   appendJsonLine,
   chooseAvailableStore,
   creationAttemptKeys,
+  emptyCandidateQueue,
+  enginePauseSeconds,
   localDateKey,
   number,
   primaryStores,
@@ -22,6 +24,7 @@ import {
   sleep,
   standbyStores,
   storeId,
+  workerSummary,
   writeJsonAtomic,
 } from "./lib/core.mjs";
 
@@ -187,23 +190,24 @@ async function refreshStatus(config, base, workerStates) {
       child_pid: active ? childPid : null,
       phase: active ? engine.phase || prior.phase || "engine-active" : prior.phase || engine.phase || "idle",
       daily_quota: quota.stores[id],
-      engine_stop_reason: engine.stop_reason || prior.engine_stop_reason || null,
+      engine_stop_reason: active ? null : engine.stop_reason || prior.engine_stop_reason || null,
       updated_at: engine.updated_at || prior.updated_at || null,
     };
     workerStates.set(id, row);
     workers.push(row);
   }
+  const summary = workerSummary(workers);
   return {
     ...base,
     contract: config.contract || "flowde-multistore-v1",
     active: base.active !== false,
     pid: base.active === false ? null : process.pid,
-    phase: workers.some((worker) => worker.active) ? "running" : base.active === false ? "stopped" : "waiting",
+    phase: base.active === false ? "stopped" : summary.phase,
     updated_at: new Date().toISOString(),
     daily_quota: quota,
     parallel: {
       configured_slots: primaryStores(config).length,
-      active_workers: workers.filter((worker) => worker.active).length,
+      ...summary,
       active_standby_workers: workers.filter((worker) => worker.active && worker.role === "standby").length,
       standby_stores: standbyStores(config).length,
     },
@@ -394,11 +398,16 @@ async function supervise() {
     }
     const refreshed = (await dailyQuotaSnapshot(config, [store])).stores[id];
     const dailyLimited = shouldRotateStore(engine) || refreshed?.blocked === true;
+    const queueComplete = emptyCandidateQueue(engine);
     workerStates.set(id, {
       ...workerStates.get(id),
       active: false,
       child_pid: null,
-      phase: dailyLimited ? "daily-quota-blocked" : "cycle-complete",
+      phase: dailyLimited
+        ? "daily-quota-blocked"
+        : queueComplete
+          ? "candidate-queue-complete"
+          : "cycle-complete",
       daily_quota: refreshed,
       engine_stop_reason: engine.stop_reason || null,
       last_error: exit.code === 0 ? null : { at: new Date().toISOString(), exit },
@@ -413,9 +422,7 @@ async function supervise() {
     });
     return {
       daily_limited: dailyLimited,
-      pause_seconds: exit.code === 0
-        ? Math.max(1, number(runtime.cycle_pause_seconds, 5))
-        : Math.max(10, number(runtime.error_pause_seconds, 30)),
+      pause_seconds: enginePauseSeconds(engine, runtime, exit.code),
     };
   }
 
@@ -528,18 +535,29 @@ async function statusCommand() {
   });
   const pid = number(String(await fsp.readFile(PID_FILE, "utf8").catch(() => "")).trim());
   const quota = await dailyQuotaSnapshot(config);
+  const workers = (stored.store_workers || []).map((worker) => ({
+    ...worker,
+    active: processActive(worker.child_pid),
+    child_pid: processActive(worker.child_pid) ? worker.child_pid : null,
+    daily_quota: quota.stores[storeId(worker.store_id)] || null,
+  }));
+  const summary = workerSummary(workers);
+  const supervisorActive = processActive(pid);
   const current = {
     ...stored,
-    active: processActive(pid),
-    pid: processActive(pid) ? pid : null,
-    phase: processActive(pid) ? stored.phase : stored.phase === "never-started" ? "never-started" : "stopped",
+    active: supervisorActive,
+    pid: supervisorActive ? pid : null,
+    phase: supervisorActive
+      ? summary.phase
+      : stored.phase === "never-started"
+        ? "never-started"
+        : "stopped",
     daily_quota: quota,
-    store_workers: (stored.store_workers || []).map((worker) => ({
-      ...worker,
-      active: processActive(worker.child_pid),
-      child_pid: processActive(worker.child_pid) ? worker.child_pid : null,
-      daily_quota: quota.stores[storeId(worker.store_id)] || null,
-    })),
+    parallel: {
+      ...(stored.parallel || {}),
+      ...summary,
+    },
+    store_workers: workers,
     updated_at: new Date().toISOString(),
   };
   await writeJsonAtomic(STATUS_FILE, current);

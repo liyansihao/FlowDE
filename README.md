@@ -10,6 +10,8 @@ FlowDE 是一个可复用的多店铺任务调度层，用于把同一套选品�
 - 每店每日额度独立计算；示例配置为 100 个，并在 `Asia/Shanghai` 的 00:00 切换到新账期。
 - 平台返回的额度拦截优先于本地计数，程序不会为了速度绕过平台限制。
 - 每家店铺有独立状态目录、审计账本和安全停止信号。
+- 候选队列暂时为空时使用独立复查间隔，避免高频空转，也不会把等待误报成整个流程已暂停。
+- 汇总状态同时报告运行、额度受限和候选队列等待的店铺数，适合多店铺看板直接读取。
 - 不依赖浏览器；真正的平台或 ERP 调用由外部引擎适配器实现。
 
 ## 快速开始
@@ -41,6 +43,8 @@ npm run stop
 | `FLOWDE_IS_STANDBY` | 当前是否作为备用店接管 |
 | `FLOWDE_REPLACING_STORE_ID` | 被接管的主店 ID |
 
+调度配置中的 `empty_queue_pause_seconds` 控制适配器返回 `candidate-queue-complete` 且本轮扫描数为 0 时的复查间隔，默认 300 秒。普通轮次仍使用 `cycle_pause_seconds`。
+
 适配器应在 `FLOWDE_RUNTIME_STATE_DIR` 中维护：
 
 - `status.json`：包含 `pid`、`phase`、`stop_reason` 和可选的 `submission_blocker`。
@@ -55,6 +59,15 @@ npm run stop
   "submission_blocker": {
     "type": "platform-daily-creation-limit"
   }
+}
+```
+
+当当前分片暂时没有新候选时，适配器可以返回：
+
+```json
+{
+  "stop_reason": "candidate-queue-complete",
+  "counts": { "scanned": 0 }
 }
 ```
 

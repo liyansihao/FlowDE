@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -106,6 +107,44 @@ export function shouldRotateStore(engineStatus = {}) {
     );
 }
 
+export function emptyCandidateQueue(engineStatus = {}) {
+  return String(engineStatus?.stop_reason || "") === "candidate-queue-complete"
+    && number(engineStatus?.counts?.scanned) === 0;
+}
+
+export function enginePauseSeconds(engineStatus = {}, runtime = {}, exitCode = 0) {
+  if (number(exitCode) !== 0) return Math.max(10, number(runtime.error_pause_seconds, 30));
+  if (emptyCandidateQueue(engineStatus)) {
+    return Math.max(60, number(runtime.empty_queue_pause_seconds, 300));
+  }
+  return Math.max(1, number(runtime.cycle_pause_seconds, 5));
+}
+
+export function workerSummary(workers = []) {
+  const rows = Array.isArray(workers) ? workers : [];
+  const active = rows.filter((worker) => worker?.active === true).length;
+  const quotaBlocked = rows.filter((worker) => (
+    worker?.daily_quota?.blocked === true || worker?.phase === "daily-quota-blocked"
+  )).length;
+  const queueComplete = rows.filter((worker) => (
+    worker?.engine_stop_reason === "candidate-queue-complete"
+      || worker?.phase === "candidate-queue-complete"
+  )).length;
+  return {
+    total_workers: rows.length,
+    active_workers: active,
+    quota_blocked_workers: quotaBlocked,
+    queue_complete_workers: queueComplete,
+    phase: active > 0
+      ? "running"
+      : rows.length > 0 && quotaBlocked === rows.length
+        ? "quota-blocked"
+        : queueComplete > 0
+          ? "queue-waiting"
+          : "waiting",
+  };
+}
+
 export function chooseAvailableStore({
   primary,
   standbys = [],
@@ -131,7 +170,7 @@ export async function readJson(filename, fallback = null) {
 
 export async function writeJsonAtomic(filename, value) {
   await fs.mkdir(path.dirname(filename), { recursive: true });
-  const temporary = `${filename}.tmp-${process.pid}-${Date.now()}`;
+  const temporary = `${filename}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
   await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   await fs.rename(temporary, filename);
 }

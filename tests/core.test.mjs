@@ -9,11 +9,14 @@ import { promisify } from "node:util";
 import {
   chooseAvailableStore,
   creationAttemptKeys,
+  enginePauseSeconds,
   localDateKey,
   primaryStores,
   readJson,
   readJsonLines,
   standbyStores,
+  workerSummary,
+  writeJsonAtomic,
 } from "../src/lib/core.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -71,6 +74,52 @@ test("standby is selected only when the primary is blocked", () => {
     quotaByStore: { p1: { blocked: true }, s1: { blocked: false } },
     assignedStoreIds: new Set(["s1"]),
   }), null);
+});
+
+test("an empty candidate queue uses the slower independent retry interval", () => {
+  const runtime = {
+    cycle_pause_seconds: 5,
+    empty_queue_pause_seconds: 300,
+    error_pause_seconds: 30,
+  };
+  assert.equal(enginePauseSeconds({
+    stop_reason: "candidate-queue-complete",
+    counts: { scanned: 0 },
+  }, runtime, 0), 300);
+  assert.equal(enginePauseSeconds({ stop_reason: "cycle-complete" }, runtime, 0), 5);
+  assert.equal(enginePauseSeconds({}, runtime, 1), 30);
+});
+
+test("multi-store summary distinguishes running, quota-blocked, and queue-waiting", () => {
+  assert.deepEqual(workerSummary([
+    { active: true, phase: "engine-active" },
+    { active: false, phase: "daily-quota-blocked", daily_quota: { blocked: true } },
+    { active: false, phase: "candidate-queue-complete", engine_stop_reason: "candidate-queue-complete" },
+  ]), {
+    total_workers: 3,
+    active_workers: 1,
+    quota_blocked_workers: 1,
+    queue_complete_workers: 1,
+    phase: "running",
+  });
+  assert.equal(workerSummary([
+    { active: false, phase: "candidate-queue-complete" },
+  ]).phase, "queue-waiting");
+});
+
+test("concurrent atomic status writes leave one valid JSON document", async () => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "flowde-atomic-"));
+  const filename = path.join(temporary, "status.json");
+  try {
+    await Promise.all(Array.from({ length: 20 }, (_, index) => (
+      writeJsonAtomic(filename, { index })
+    )));
+    const status = await readJson(filename);
+    assert.equal(Number.isInteger(status.index), true);
+    assert.deepEqual((await fs.readdir(temporary)).filter((name) => name.includes(".tmp-")), []);
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test("example adapter writes only local runtime state", async () => {
