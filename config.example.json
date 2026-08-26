@@ -2,20 +2,33 @@
   "contract": "flowde-multistore-v1",
   "engine": "./adapters/example-engine.mjs",
   "runtime": {
-    "store_concurrency": 2,
+    "store_concurrency": 10,
     "primary_store_ids": [
       "primary-01",
-      "primary-02"
+      "primary-02",
+      "primary-03",
+      "primary-04",
+      "primary-05",
+      "primary-06",
+      "primary-07",
+      "primary-08",
+      "primary-09",
+      "primary-10"
     ],
     "standby_store_ids": [
       "standby-01"
     ],
     "daily_store_creation_limit": 100,
-    "daily_quota_timezone": "Asia/Shanghai",
-    "daily_quota_reset_local": "00:00",
-    "max_creations_per_cycle": 10,
-    "cycle_pause_seconds": 5,
-    "empty_queue_pause_seconds": 300,
+    "daily_quota_timezone": "Europe/Moscow",
+    "daily_quota_reset_local": "03:00",
+    "max_creations_per_cycle": 20,
+    "cycle_pause_seconds": 20,
+    "empty_queue_pause_seconds": 900,
+    "error_pause_seconds": 30,
+    "rate_limit_pause_seconds": 300,
+    "rate_limit_retry_stagger_seconds": 5,
+    "store_start_stagger_seconds": 5,
+    "shared_pool_wait_ms": 600000,
     "standby_poll_seconds": 30,
     "supervisor_poll_seconds": 5
   },
@@ -28,6 +41,46 @@
     {
       "store_id": "primary-02",
       "store_name": "Primary Store 02",
+      "enabled": true
+    },
+    {
+      "store_id": "primary-03",
+      "store_name": "Primary Store 03",
+      "enabled": true
+    },
+    {
+      "store_id": "primary-04",
+      "store_name": "Primary Store 04",
+      "enabled": true
+    },
+    {
+      "store_id": "primary-05",
+      "store_name": "Primary Store 05",
+      "enabled": true
+    },
+    {
+      "store_id": "primary-06",
+      "store_name": "Primary Store 06",
+      "enabled": true
+    },
+    {
+      "store_id": "primary-07",
+      "store_name": "Primary Store 07",
+      "enabled": true
+    },
+    {
+      "store_id": "primary-08",
+      "store_name": "Primary Store 08",
+      "enabled": true
+    },
+    {
+      "store_id": "primary-09",
+      "store_name": "Primary Store 09",
+      "enabled": true
+    },
+    {
+      "store_id": "primary-10",
+      "store_name": "Primary Store 10",
       "enabled": true
     },
     {

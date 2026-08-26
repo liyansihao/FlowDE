@@ -1,8 +1,8 @@
 {
   "name": "flowde",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "A data-safe multi-store supervisor with sharding, standby failover, and per-store daily quotas.",
+  "description": "A data-safe multi-store supervisor with sharding, standby failover, authoritative platform quotas, and rate-limit coordination.",
   "type": "module",
   "engines": {
     "node": ">=20"

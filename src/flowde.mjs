@@ -13,13 +13,15 @@ import {
   creationAttemptKeys,
   emptyCandidateQueue,
   enginePauseSeconds,
-  localDateKey,
   number,
   primaryStores,
   processActive,
+  quotaBlockForDay,
+  quotaDayKey,
   readJson,
   readJsonLines,
   runtimeStores,
+  shardStaggerSeconds,
   shouldRotateStore,
   sleep,
   standbyStores,
@@ -78,8 +80,9 @@ async function loadConfig() {
   if (!config) {
     throw new Error(`missing private config: copy config.example.json to ${CONFIG_FILE}`);
   }
-  if (String(config?.runtime?.daily_quota_reset_local || "00:00") !== "00:00") {
-    throw new Error("this release supports a daily quota reset at 00:00 only");
+  const resetLocal = String(config?.runtime?.daily_quota_reset_local || "00:00");
+  if (!/^(?:[01]?\d|2[0-3]):[0-5]\d$/u.test(resetLocal)) {
+    throw new Error("runtime.daily_quota_reset_local must use HH:MM in local time");
   }
   const allStores = runtimeStores(config);
   const ids = allStores.map((store) => storeId(store.store_id));
@@ -93,8 +96,9 @@ async function loadConfig() {
 
 export async function dailyQuotaSnapshot(config, stores = runtimeStores(config), now = new Date()) {
   const timeZone = String(config?.runtime?.daily_quota_timezone || "UTC");
+  const resetLocal = String(config?.runtime?.daily_quota_reset_local || "00:00");
   const limit = Math.max(1, number(config?.runtime?.daily_store_creation_limit, 100));
-  const dayKey = localDateKey(now, timeZone);
+  const dayKey = quotaDayKey(now, timeZone, resetLocal);
   const [persisted, ...auditRows] = await Promise.all([
     readJson(QUOTA_FILE, {}),
     ...stores.map((store) => readJsonLines(engineAuditFile(store.store_id))),
@@ -107,20 +111,29 @@ export async function dailyQuotaSnapshot(config, stores = runtimeStores(config),
       exactStoreId: id,
       dayKey,
       timeZone,
+      resetLocal,
       scopedToStore: true,
     }).size;
-    const externalBlock = persistedStores[id] || null;
-    const blocked = used >= limit || externalBlock?.blocked === true;
+    const externalBlock = quotaBlockForDay(
+      persistedStores[id] || null,
+      dayKey,
+      timeZone,
+      resetLocal,
+    );
+    // Local attempt counts are observability only. Only an explicit platform or
+    // ERP response is authoritative enough to stop a store for the quota day.
+    const blocked = externalBlock?.blocked === true;
     result[id] = {
       day_key: dayKey,
       time_zone: timeZone,
-      reset_local: "00:00",
+      reset_local: resetLocal,
       limit,
       used,
       remaining: Math.max(0, limit - used),
       blocked,
-      reason: used >= limit ? "local-daily-creation-limit" : externalBlock?.reason || null,
+      reason: externalBlock?.reason || null,
       detected_at: externalBlock?.detected_at || null,
+      message: externalBlock?.message || null,
     };
   });
   return { day_key: dayKey, time_zone: timeZone, limit, stores: result };
@@ -128,13 +141,14 @@ export async function dailyQuotaSnapshot(config, stores = runtimeStores(config),
 
 async function markStoreBlocked(config, store, reason, details = {}) {
   const timeZone = String(config?.runtime?.daily_quota_timezone || "UTC");
-  const dayKey = localDateKey(new Date(), timeZone);
+  const resetLocal = String(config?.runtime?.daily_quota_reset_local || "00:00");
+  const dayKey = quotaDayKey(new Date(), timeZone, resetLocal);
   const existing = await readJson(QUOTA_FILE, {});
   const value = existing?.day_key === dayKey ? existing : {
     contract: "flowde-daily-store-quota-v1",
     day_key: dayKey,
     time_zone: timeZone,
-    reset_local: "00:00",
+    reset_local: resetLocal,
     stores: {},
   };
   value.stores ||= {};
@@ -290,6 +304,21 @@ async function supervise() {
   async function chooseAssignment(primary, shardIndex) {
     return withAssignmentLock(async () => {
       const candidates = [primary, ...standbys];
+      const quotaTimeZone = String(runtime.daily_quota_timezone || "UTC");
+      const quotaResetLocal = String(runtime.daily_quota_reset_local || "00:00");
+      const currentQuotaDay = quotaDayKey(new Date(), quotaTimeZone, quotaResetLocal);
+      for (const candidate of candidates) {
+        const priorEngine = await readRuntimeJson(engineStatusFile(candidate.store_id), {});
+        const blockerAt = String(
+          priorEngine?.submission_blocker?.detected_at || priorEngine?.updated_at || "",
+        );
+        if (shouldRotateStore(priorEngine)
+          && quotaDayKey(blockerAt, quotaTimeZone, quotaResetLocal) === currentQuotaDay) {
+          await persistBlock(candidate, "platform-daily-creation-limit", {
+            message: priorEngine?.submission_blocker?.message || null,
+          });
+        }
+      }
       const quota = await dailyQuotaSnapshot(config, candidates);
       const assignedElsewhere = new Set(
         [...slotAssignments.entries()]
@@ -339,11 +368,17 @@ async function supervise() {
     const id = storeId(store.store_id);
     const runtimeDir = storeDirectory(id);
     await fsp.mkdir(runtimeDir, { recursive: true });
-    const maxCreations = Math.max(0, Math.min(
-      number(runtime.max_creations_per_cycle, 10),
-      number(quota?.remaining),
-    ));
-    if (maxCreations <= 0) return { daily_limited: true, pause_seconds: 1 };
+    const maxCreations = quota?.blocked === true
+      ? 0
+      : Math.max(0, number(runtime.max_creations_per_cycle, 10));
+    if (maxCreations <= 0) {
+      return {
+        daily_limited: quota?.blocked === true,
+        pause_seconds: quota?.blocked === true
+          ? 1
+          : Math.max(1, number(runtime.cycle_pause_seconds, 5)),
+      };
+    }
     const prior = workerStates.get(id) || {};
     workerStates.set(id, {
       ...prior,
@@ -365,8 +400,12 @@ async function supervise() {
         FLOWDE_MAX_CREATIONS: String(maxCreations),
         FLOWDE_DAILY_LIMIT: String(quota.limit),
         FLOWDE_DAILY_TIMEZONE: String(quota.time_zone),
+        FLOWDE_DAILY_RESET_LOCAL: String(quota.reset_local),
         FLOWDE_IS_STANDBY: isStandby ? "1" : "0",
         FLOWDE_REPLACING_STORE_ID: isStandby ? storeId(primary.store_id) : "",
+        FLOWDE_REFRESH_SHARED_POOL: shardIndex === 0 ? "1" : "0",
+        FLOWDE_RUN_STARTED_AT: startedAt,
+        FLOWDE_SHARED_POOL_WAIT_MS: String(runtime.shared_pool_wait_ms || 600_000),
       },
       stdio: ["ignore", logFd, logFd],
     });
@@ -399,12 +438,16 @@ async function supervise() {
     const refreshed = (await dailyQuotaSnapshot(config, [store])).stores[id];
     const dailyLimited = shouldRotateStore(engine) || refreshed?.blocked === true;
     const queueComplete = emptyCandidateQueue(engine);
+    const rateLimited = /(?:api-)?rate-limit/iu.test(String(engine?.stop_reason || ""))
+      || /rate-limit/iu.test(String(engine?.runtime_blocker?.type || ""));
     workerStates.set(id, {
       ...workerStates.get(id),
       active: false,
       child_pid: null,
       phase: dailyLimited
         ? "daily-quota-blocked"
+        : rateLimited
+          ? "rate-limited"
         : queueComplete
           ? "candidate-queue-complete"
           : "cycle-complete",
@@ -422,11 +465,16 @@ async function supervise() {
     });
     return {
       daily_limited: dailyLimited,
-      pause_seconds: enginePauseSeconds(engine, runtime, exit.code),
+      pause_seconds: enginePauseSeconds(engine, runtime, exit.code, { shardIndex }),
     };
   }
 
   async function runSlot(primary, shardIndex) {
+    await pauseInterruptibly(shardStaggerSeconds(
+      shardIndex,
+      runtime.store_start_stagger_seconds,
+      120,
+    ));
     while (!(await stopped())) {
       const assignment = await chooseAssignment(primary, shardIndex);
       if (!assignment) {
