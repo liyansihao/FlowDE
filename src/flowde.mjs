@@ -406,6 +406,12 @@ async function supervise() {
         FLOWDE_REFRESH_SHARED_POOL: shardIndex === 0 ? "1" : "0",
         FLOWDE_RUN_STARTED_AT: startedAt,
         FLOWDE_SHARED_POOL_WAIT_MS: String(runtime.shared_pool_wait_ms || 600_000),
+        FLOWDE_MAX_SCANS_PER_CYCLE: String(Math.max(20, number(runtime.max_scans_per_cycle, 200))),
+        FLOWDE_CROSS_STORE_REUSE_DIVISOR: String(Math.max(
+          1,
+          Math.floor(number(runtime.cross_store_reuse_divisor, 5)),
+        )),
+        FLOWDE_SHARED_CLAIM_DIR: path.join(STATE_DIR, "shared", "item-claims"),
       },
       stdio: ["ignore", logFd, logFd],
     });
