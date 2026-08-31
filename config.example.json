@@ -22,8 +22,6 @@
     "daily_quota_timezone": "Europe/Moscow",
     "daily_quota_reset_local": "03:00",
     "max_creations_per_cycle": 20,
-    "max_scans_per_cycle": 200,
-    "cross_store_reuse_divisor": 5,
     "cycle_pause_seconds": 20,
     "empty_queue_pause_seconds": 900,
     "error_pause_seconds": 30,

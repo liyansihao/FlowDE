@@ -22,13 +22,6 @@ import {
   workerSummary,
   writeJsonAtomic,
 } from "../src/lib/core.mjs";
-import {
-  acquireItemClaim,
-  crossStoreReuseEligible,
-  duplicateDisposition,
-  releaseItemClaim,
-  updateItemClaim,
-} from "../src/lib/item-claims.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -265,90 +258,6 @@ test("example adapter writes only local runtime state", async () => {
     assert.equal(status.stop_reason, "cycle-complete");
     assert.equal(status.counts.submitted, 2);
     assert.equal(audit.length, 2);
-  } finally {
-    await fs.rm(temporary, { recursive: true, force: true });
-  }
-});
-
-test("cross-store reuse is deterministic and stays near twenty percent", () => {
-  const decisions = Array.from({ length: 1_000 }, (_, index) => (
-    crossStoreReuseEligible(`item-${index}`, "store-b", 5)
-  ));
-  assert.deepEqual(decisions, Array.from({ length: 1_000 }, (_, index) => (
-    crossStoreReuseEligible(`item-${index}`, "store-b", 5)
-  )));
-  const selected = decisions.filter(Boolean).length;
-  assert.equal(selected >= 150 && selected <= 250, true);
-});
-
-test("duplicate policy blocks the same store and never reuses failures", () => {
-  assert.equal(duplicateDisposition([
-    { item_id: "same", store_id: "store-a", state: "submitted" },
-  ], { itemId: "same", storeId: "store-a" }).reason, "same-store-attempted");
-  assert.equal(duplicateDisposition([
-    { item_id: "failed", store_id: "store-a", state: "failed", submission_attempted: true },
-  ], { itemId: "failed", storeId: "store-b" }).reason, "cross-store-attempt-not-successful");
-  assert.equal(duplicateDisposition([
-    {
-      item_id: "quota-only",
-      store_id: "store-a",
-      state: "failed",
-      submission_attempted: true,
-      quota_failure: true,
-    },
-  ], { itemId: "quota-only", storeId: "store-b" }).action, "new");
-});
-
-test("a successful cross-store item is reused only inside the stable sample", () => {
-  const reusable = Array.from({ length: 100 }, (_, index) => `success-${index}`)
-    .find((itemId) => crossStoreReuseEligible(itemId, "store-b", 5));
-  const outside = Array.from({ length: 100 }, (_, index) => `outside-${index}`)
-    .find((itemId) => !crossStoreReuseEligible(itemId, "store-b", 5));
-  const prior = (itemId) => [{ item_id: itemId, store_id: "store-a", state: "submitted" }];
-  assert.equal(duplicateDisposition(prior(reusable), {
-    itemId: reusable,
-    storeId: "store-b",
-  }).action, "reuse");
-  assert.equal(duplicateDisposition(prior(outside), {
-    itemId: outside,
-    storeId: "store-b",
-  }).action, "block");
-});
-
-test("atomic item claims allow only one concurrent submitter", async () => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "flowde-claim-"));
-  try {
-    const claims = await Promise.all(Array.from({ length: 20 }, () => acquireItemClaim({
-      claimDirectory: temporary,
-      itemId: "shared-item",
-      storeId: "store-a",
-    })));
-    assert.equal(claims.filter((claim) => claim.acquired).length, 1);
-    assert.equal(await releaseItemClaim(claims.find((claim) => claim.acquired)), true);
-  } finally {
-    await fs.rm(temporary, { recursive: true, force: true });
-  }
-});
-
-test("a completed claim can be safely handed to another store", async () => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "flowde-reuse-"));
-  try {
-    const first = await acquireItemClaim({
-      claimDirectory: temporary,
-      itemId: "reusable-item",
-      storeId: "store-a",
-    });
-    assert.equal(first.acquired, true);
-    assert.equal(await updateItemClaim(first, "completed"), true);
-    const second = await acquireItemClaim({
-      claimDirectory: temporary,
-      itemId: "reusable-item",
-      storeId: "store-b",
-      allowCompletedCrossStoreReuse: true,
-    });
-    assert.equal(second.acquired, true);
-    assert.equal(second.reused_after_store_id, "store-a");
-    assert.equal(await releaseItemClaim(second), true);
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }
